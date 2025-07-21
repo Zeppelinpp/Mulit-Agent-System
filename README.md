@@ -27,6 +27,9 @@ tests/                    # Test suite
 - **Tool Integration**: Convert Python functions to OpenAI tool format
 - **State Management**: Persistent agent state and task status tracking
 - **Rich Output**: Beautiful console visualization using Rich library
+  
+## 🖥️ Console Results
+![](./assets/ConsoleResult.png)
 
 ## 🎯 Usage
 
