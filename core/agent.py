@@ -8,6 +8,13 @@ from .agent_prompts import SYSTEM_PROMPT, REVIEW_PROMPT
 from .utils import ToolConverter
 from rich.console import Console
 from rich.table import Table
+from rich.live import Live
+from rich.panel import Panel
+from rich.layout import Layout
+from rich.text import Text
+from rich.spinner import Spinner
+import threading
+import time
 
 
 class Task(BaseModel):
@@ -33,31 +40,52 @@ class TaskList(BaseModel):
 
     def pretty_print(self):
         console = Console()
-        console.print("\n[bold green]Sequential Tasks:[/bold green]")
+        
+        # Create a more elegant task overview
+        console.print(f"\n[bold blue]📋 Task Planning Complete[/bold blue]")
+        
         if self.sequential_tasks:
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("ID", style="dim")
-            table.add_column("Name")
-            table.add_column("Goal") 
-            table.add_column("Assigned Agent", style="bold")
-            for task in self.sequential_tasks:
-                table.add_row(task.id, task.task_name, task.goal, task.agent_name)
+            console.print(f"\n[bold green]🔄 Sequential Tasks ({len(self.sequential_tasks)} tasks)[/bold green]")
+            table = Table(show_header=True, header_style="bold magenta", border_style="green", padding=(0, 1), show_lines=True)
+            table.add_column("Step", style="bold cyan", width=6, justify="center")
+            table.add_column("Task Name", style="bold white", width=25)
+            table.add_column("Goal", style="dim white", width=50)
+            table.add_column("Agent", style="bold yellow", width=15)
+            
+            for i, task in enumerate(self.sequential_tasks, 1):
+                table.add_row(
+                    f"{i}",
+                    task.task_name,
+                    task.goal,
+                    task.agent_name
+                )
             console.print(table)
         else:
-            console.print("  [italic]None[/italic]")
+            console.print(f"\n[bold dim]🔄 Sequential Tasks: None[/bold dim]")
 
-        console.print("\n[bold blue]Parallel Tasks:[/bold blue]")
         if self.parallel_tasks:
-            table = Table(show_header=True, header_style="bold cyan")
-            table.add_column("ID", style="dim")
-            table.add_column("Name")
-            table.add_column("Goal")
-            table.add_column("Assigned Agent", style="bold")
+            console.print(f"\n[bold blue]⚡ Parallel Tasks ({len(self.parallel_tasks)} tasks)[/bold blue]")
+            table = Table(show_header=True, header_style="bold cyan", border_style="blue", padding=(0, 1), show_lines=True)
+            table.add_column("ID", style="bold cyan", width=6, justify="center")
+            table.add_column("Task Name", style="bold white", width=25)
+            table.add_column("Goal", style="dim white", width=50)
+            table.add_column("Agent", style="bold yellow", width=15)
+            
             for task in self.parallel_tasks:
-                table.add_row(task.id, task.task_name, task.goal, task.agent_name)
+                table.add_row(
+                    task.id,
+                    task.task_name,
+                    task.goal,
+                    task.agent_name
+                )
             console.print(table)
         else:
-            console.print("  [italic]None[/italic]")
+            console.print(f"\n[bold dim]⚡ Parallel Tasks: None[/bold dim]")
+            
+        # Add execution summary
+        total_tasks = len(self.sequential_tasks) + len(self.parallel_tasks)
+        console.print(f"\n[bold]📊 Total Tasks: {total_tasks}[/bold] ([green]{len(self.sequential_tasks)} sequential[/green], [blue]{len(self.parallel_tasks)} parallel[/blue])")
+        console.print("[dim]Starting task execution...[/dim]\n")
 
 class AgentState(BaseModel):
     """State of the Agent."""
@@ -177,6 +205,15 @@ class PlanningAgent(BaseAgent):
     async def plan(self, query: str) -> TaskList:
         user_message = {"role": "user", "content": query}
         context = await self._get_context()
+        
+        # Show planning status
+        status_manager.update_agent_status(
+            "Planner", 
+            "working", 
+            "Task Planning", 
+            "analyzing query and creating tasks"
+        )
+        
         # planning and create task list
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -193,12 +230,32 @@ class PlanningAgent(BaseAgent):
             task_list = TaskList.model_validate_json(
                 response.choices[0].message.content
             )
+            
+            status_manager.update_agent_status(
+                "Planner", 
+                "completed", 
+                "Task Planning", 
+                f"created {len(task_list.sequential_tasks + task_list.parallel_tasks)} tasks"
+            )
+            
             return task_list
         except ValidationError as e:
             if self._state.retries < 3:
                 self._state.retries += 1
+                status_manager.update_agent_status(
+                    "Planner", 
+                    "working", 
+                    "Task Planning", 
+                    f"retrying planning (attempt {self._state.retries})"
+                )
                 return await self.plan(query)
             else:
+                status_manager.update_agent_status(
+                    "Planner", 
+                    "failed", 
+                    "Task Planning", 
+                    "planning failed after retries"
+                )
                 raise e
 
     async def _review_single_task(self, task: Task) -> ReviewResult:
@@ -228,6 +285,80 @@ class PlanningAgent(BaseAgent):
                 return await self._review_single_task(task)
             else:
                 raise e
+
+
+class AgentStatus:
+    """Manages the live status display for all agents"""
+
+    def __init__(self):
+        self.console = Console()
+        self.agent_statuses = {}
+        self.live = None
+        self._lock = threading.Lock()
+
+    def start_live_display(self):
+        """Start the live display"""
+        self.live = Live(self._generate_display(), console=self.console, refresh_per_second=4)
+        self.live.start()
+
+    def stop_live_display(self):
+        """Stop the live display"""
+        if self.live:
+            self.live.stop()
+
+    def update_agent_status(self, agent_name: str, status: str, task_name: str = "", details: str = ""):
+        """Update the status of an agent"""
+        with self._lock:
+            self.agent_statuses[agent_name] = {
+                "status": status,
+                "task_name": task_name,
+                "details": details,
+                "timestamp": time.time()
+            }
+            if self.live:
+                self.live.update(self._generate_display())
+
+    def remove_agent_status(self, agent_name: str):
+        """Remove an agent from the status display"""
+        with self._lock:
+            if agent_name in self.agent_statuses:
+                del self.agent_statuses[agent_name]
+                if self.live:
+                    self.live.update(self._generate_display())
+
+    def _generate_display(self):
+        """Generate the live display content"""
+        if not self.agent_statuses:
+            return Panel("[dim]All agents idle[/dim]", title="[bold blue]Agent Status[/bold blue]", border_style="blue")
+            
+        table = Table(show_header=True, header_style="bold magenta", border_style="dim", show_lines=True)
+        table.add_column("Agent", style="cyan")
+        table.add_column("Status", style="yellow")
+        table.add_column("Current Task", style="green")
+        table.add_column("Details", style="dim")
+        
+        for agent_name, info in self.agent_statuses.items():
+            status_text = info["status"]
+            if info["status"] == "working":
+                status_text = f"[bold yellow]● {info['status']}[/bold yellow]"
+            elif info["status"] == "completed":
+                status_text = f"[bold green]✓ {info['status']}[/bold green]"
+            elif info["status"] == "failed":
+                status_text = f"[bold red]✗ {info['status']}[/bold red]"
+            else:
+                status_text = f"[dim]{info['status']}[/dim]"
+                
+            table.add_row(
+                f"[bold]{agent_name}[/bold]",
+                status_text,
+                f"[dim]{info['task_name']}[/dim]" if info['task_name'] else "[dim]idle[/dim]",
+                f"[dim]{info['details']}[/dim]"
+            )
+            
+        return Panel(table, title="[bold blue]Agent Worker Status[/bold blue]", border_style="blue")
+
+# Global status manager
+status_manager = AgentStatus()
 
 
 class AgentWorker(BaseAgent):
@@ -285,6 +416,11 @@ class AgentWorker(BaseAgent):
         return tool_list
 
     async def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]):
+        status_manager.update_agent_status(
+            self.name,
+            "working",
+            details=f"executing {tool_name}"
+        )
         tool = self.tools_registry[tool_name]
         if asyncio.iscoroutinefunction(tool):
             result = await tool(**tool_args)
@@ -313,9 +449,14 @@ class AgentWorker(BaseAgent):
     async def _execute_task(self, task: Task):
         task.status = "in_progress"
         task_context = task.context
-        print(
-            f"Agent: {self.name} running task: {task.task_name}\nGoal: {task.goal}\n==============\n"
+
+        status_manager.update_agent_status(
+            self.name,
+            "working",
+            task.task_name,
+            "starting task"
         )
+
         user_message = [
             {
                 "role": "user",
@@ -323,6 +464,13 @@ class AgentWorker(BaseAgent):
             }
         ]
         while True:
+            status_manager.update_agent_status(
+                self.name,
+                "working",
+                task.task_name,
+                "thinking..."
+            )
+
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -338,7 +486,12 @@ class AgentWorker(BaseAgent):
             if not tool_calls:
                 task.result = message.content
                 task.status = "success"
-                print(f"Task {task.task_name} completed with result:\n{task.result}\n")
+                status_manager.update_agent_status(
+                    self.name,
+                    "completed",
+                    task.task_name,
+                    "task finished"
+                )
                 return task
 
             tool_results = await self._handle_tool_calls(tool_calls)
@@ -357,20 +510,40 @@ class AgentWorker(BaseAgent):
                 )
 
     async def run(self, result_queue: asyncio.Queue):
+        status_manager.update_agent_status(self.name, "idle", "", "waiting for tasks")
+
         while True:
             try:
                 task = await self.task_queue.get()
                 if task is None:
+                    status_manager.remove_agent_status(self.name)
                     self.task_queue.task_done()
                     break
 
                 self._state.assigned_tasks.append(task)
                 result = await self._execute_task(task)
-                print(f"{self.name} putting result in queue\n")
+
+                status_manager.update_agent_status(
+                    self.name,
+                    "completed",
+                    task.task_name,
+                    "submitting result"
+                )
+
                 await result_queue.put(result)
                 self.task_queue.task_done()
+
+                # Brief pause to show completion status
+                await asyncio.sleep(0.5)
+                status_manager.update_agent_status(self.name, "idle", "", "waiting for tasks")
+
             except Exception as e:
-                print(f"Error in worker {self.name}: {e}")
+                status_manager.update_agent_status(
+                    self.name,
+                    "failed",
+                    task.task_name if 'task' in locals() else "",
+                    f"error: {str(e)[:50]}"
+                )
                 self.task_queue.task_done()
                 continue
 
@@ -404,58 +577,112 @@ class AgentRunner:
                 self.result_queue.task_done()
                 break
             try:
-                print(f"Reviewing task: {task.task_name}")
+                status_manager.update_agent_status(
+                    "Planner", 
+                    "working", 
+                    task.task_name, 
+                    "reviewing task result"
+                )
+                
                 review = await self.planner._review_single_task(task)
-                print(f"Review result: {review.feedback}")
+                
                 if review.is_success == "success":
                     self.planner._state.success_tasks.append(task)
-                    print(f"Task {task.task_name} passed")
+                    status_manager.update_agent_status(
+                        "Planner", 
+                        "completed", 
+                        task.task_name, 
+                        f"✓ approved - {review.feedback[:30] if review.feedback else 'passed'}"
+                    )
                 else:
                     task.status = "failure"
                     self.planner._state.failed_tasks.append(task)
-                    print(f"Task {task.task_name} failed")
+                    status_manager.update_agent_status(
+                        "Planner", 
+                        "failed", 
+                        task.task_name, 
+                        f"✗ rejected - {review.feedback[:30] if review.feedback else 'failed'}"
+                    )
 
                 task._done_event.set()
                 self.result_queue.task_done()
+                
+                # Brief pause to show review result
+                await asyncio.sleep(1.0)
+                
+                # Check if there are more tasks to review
+                if self.result_queue.empty():
+                    status_manager.update_agent_status("Planner", "idle", "", "waiting for results")
+                    
             except Exception as e:
-                print(f"Error in review loop: {e}")
+                status_manager.update_agent_status(
+                    "Planner", 
+                    "failed", 
+                    task.task_name if 'task' in locals() else "", 
+                    f"review error: {str(e)[:30]}"
+                )
                 if not self.running:
                     break
 
     async def run(self, query: str):
-        task_list = await self.planner.plan(query)
-        task_list.pretty_print()
+        # Start the live status display
+        status_manager.start_live_display()
+        
+        try:
+            # Initialize planner status
+            status_manager.update_agent_status("Planner", "idle", "", "initializing")
+            
+            task_list = await self.planner.plan(query)
+            task_list.pretty_print()
 
-        # Start worker tasks
-        worker_tasks = []
-        for worker in self.workers.values():
-            worker_task = asyncio.create_task(worker.run(self.result_queue))
-            worker_tasks.append(worker_task)
+            # Update planner status after planning
+            status_manager.update_agent_status("Planner", "idle", "", "waiting for results")
 
-        # Start review handler
-        review_handler = asyncio.create_task(self.handle_result_loop())
+            # Start worker tasks
+            worker_tasks = []
+            for worker in self.workers.values():
+                worker_task = asyncio.create_task(worker.run(self.result_queue))
+                worker_tasks.append(worker_task)
 
-        # Execute tasks
-        if task_list.parallel_tasks:
-            await self.execute_parallel(task_list.parallel_tasks)
+            # Start review handler
+            review_handler = asyncio.create_task(self.handle_result_loop())
 
-        if task_list.sequential_tasks:
-            await self.execute_sequential(task_list.sequential_tasks)
+            # Execute tasks
+            if task_list.parallel_tasks:
+                await self.execute_parallel(task_list.parallel_tasks)
 
-        # Wait for all results to be processed
-        await self.result_queue.join()
+            if task_list.sequential_tasks:
+                await self.execute_sequential(task_list.sequential_tasks)
 
-        await self.result_queue.put(None)
+            # Wait for all results to be processed
+            await self.result_queue.join()
 
-        # Signal workers to stop
-        for worker in self.workers.values():
-            await worker.task_queue.put(None)
+            await self.result_queue.put(None)
 
-        # Wait for all workers to finish
-        await asyncio.gather(*worker_tasks, return_exceptions=True)
+            # Signal workers to stop
+            for worker in self.workers.values():
+                await worker.task_queue.put(None)
 
-        # Stop review handler
-        self.running = False
-        await review_handler
+            # Wait for all workers to finish
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
 
-        return self.planner._state
+            # Stop review handler
+            self.running = False
+            await review_handler
+
+            # Final status update
+            status_manager.update_agent_status(
+                "Planner", 
+                "completed", 
+                "Workflow Complete", 
+                f"✓ {len(self.planner._state.success_tasks)} succeeded, ✗ {len(self.planner._state.failed_tasks)} failed"
+            )
+            
+            # Brief pause to show final status
+            await asyncio.sleep(2.0)
+
+            return self.planner._state
+            
+        finally:
+            # Stop the live display
+            status_manager.stop_live_display()
