@@ -11,3 +11,6 @@ wheels/
 
 # Testing
 .pytest_cache/
+
+# Environment variables
+.env
