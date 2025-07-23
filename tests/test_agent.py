@@ -1,11 +1,15 @@
 import asyncio
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
 
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from core.agent import PlanningAgent, AgentWorker, AgentRunner
+from core.tools import web_search
+
+load_dotenv()
 
 # ==== 定义模拟工具函数（实际业务中你可以替换成真实的工具） ====
 
@@ -24,36 +28,36 @@ def plot_data():
 # ==== 初始化智能体 ====
 
 client = AsyncOpenAI(
-    api_key="sk-4cd77baf9cdb43aeadb180887e28ad22",  # 替换为你的 key
-    base_url="https://api.deepseek.com",  # 适配你实际部署的 API
+    api_key=os.getenv("QWEN_API_KEY"),
+    base_url=os.getenv("QWEN_BASE_URL"),
 )
 
 worker_1 = AgentWorker(
-    name="DataAgent",
-    description="Handles data ingestion and preprocessing",
-    model="deepseek-chat",
+    name="Researcher_1",
+    description="Comprehensive research on certain topic",
+    model="qwen-plus-latest",
     client=client,
     system_prompt="You are a data processing expert.",
-    tools=[load_csv, clean_data],
+    tools=[web_search],
 )
 
 worker_2 = AgentWorker(
-    name="AnalysisAgent",
-    description="Performs statistics and visualization",
-    model="deepseek-chat",
+    name="Researcher_2",
+    description="Comprehensive research on certain topic",
+    model="qwen-plus-latest",
     client=client,
     system_prompt="You are a data analysis expert.",
-    tools=[describe_data, plot_data],
+    tools=[web_search],
 )
 
 workers = {
-    "DataAgent": worker_1,
-    "AnalysisAgent": worker_2,
+    "Researcher_1": worker_1,
+    "Researcher_2": worker_2,
 }
 
 workers_spec = [worker_1.description, worker_2.description]
 
-planner = PlanningAgent(name="Planner", client=client, workers=workers_spec)
+planner = PlanningAgent(name="Planner", client=client, model="qwen-plus-latest", workers=workers_spec)
 
 runner = AgentRunner(planner=planner, workers=workers)
 
@@ -67,7 +71,7 @@ async def main():
     
     console = Console()
     
-    query = "请完成一个简单的数据分析，包括读取CSV、数据清洗、描述统计和绘图。"
+    query = "How to build a multi-agent system using asyncio queue? And what's behind the hodd of asyncio queue."
     final_state = await runner.run(query)
 
     # Create elegant final results display
