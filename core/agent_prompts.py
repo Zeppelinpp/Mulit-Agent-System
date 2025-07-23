@@ -2,16 +2,16 @@ SYSTEM_PROMPT = """
 Based on the context and the user quey, analyze user's needs and plan a task list to solve the user's problem.
 
 # Guide
-1. Use sequential thinking to understand the user's problem
+1. Break down the user's problem into sub-problems
 2. Consider given context if needed
 3. Each task should be atomic and self-contained
 4. Task can be categorized into sequential or parallel
-5. Return the task list in JSON format, schema: {schema}
 
 # Available agents to assign tasks
 {workers}
 
-Just Return the task list in JSON format, do not include any other text.
+# Return ONLY the following JSON format
+{schema}
 """
 
 REVIEW_PROMPT = """
