@@ -1,4 +1,3 @@
-from email import message
 import json
 import asyncio
 from abc import ABC, abstractmethod
@@ -11,9 +10,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.live import Live
 from rich.panel import Panel
-from rich.layout import Layout
-from rich.text import Text
-from rich.spinner import Spinner
 from rich.markdown import Markdown
 import threading
 import time
@@ -47,7 +43,7 @@ class TaskList(BaseModel):
         console = Console()
 
         # Create a more elegant task overview
-        console.print(f"\n[bold blue]📋 Task Planning Complete[/bold blue]")
+        console.print("\n[bold blue]📋 Task Planning Complete[/bold blue]")
 
         if self.sequential_tasks:
             console.print(
@@ -69,7 +65,7 @@ class TaskList(BaseModel):
                 table.add_row(f"{i}", task.task_name, task.goal, task.agent_name)
             console.print(table)
         else:
-            console.print(f"\n[bold dim]🔄 Sequential Tasks: None[/bold dim]")
+            console.print("\n[bold dim]🔄 Sequential Tasks: None[/bold dim]")
 
         if self.parallel_tasks:
             console.print(
@@ -91,7 +87,7 @@ class TaskList(BaseModel):
                 table.add_row(task.id, task.task_name, task.goal, task.agent_name)
             console.print(table)
         else:
-            console.print(f"\n[bold dim]⚡ Parallel Tasks: None[/bold dim]")
+            console.print("\n[bold dim]⚡ Parallel Tasks: None[/bold dim]")
 
         # Add execution summary
         total_tasks = len(self.sequential_tasks) + len(self.parallel_tasks)
@@ -271,19 +267,34 @@ class PlanningAgent(BaseAgent):
     async def _review_single_task(self, task: Task) -> ReviewResult:
         goal = task.goal
         result = task.result
-        review = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": REVIEW_PROMPT.format(
-                        schema=ReviewResult.model_json_schema()
-                    ),
-                },
-                {"role": "user", "content": f"Goal: {goal}\nResult: {result}"},
-            ],
-            response_format={"type": "json_object"},
-        )
+        if isinstance(self.client, AsyncOpenAI):
+            review = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": REVIEW_PROMPT.format(
+                            schema=ReviewResult.model_json_schema()
+                        ),
+                    },
+                    {"role": "user", "content": f"Goal: {goal}\nResult: {result}"},
+                ],
+                response_format={"type": "json_object"},
+            )
+        else:
+            review = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": REVIEW_PROMPT.format(
+                            schema=ReviewResult.model_json_schema()
+                        ),
+                    },
+                    {"role": "user", "content": f"Goal: {goal}\nResult: {result}"},
+                ],
+                response_format={"type": "json_object"},
+            )
         review_result_json = review.choices[0].message.content
         try:
             review_result = ReviewResult.model_validate_json(review_result_json)
@@ -305,7 +316,7 @@ class PlanningAgent(BaseAgent):
         failed_tasks = [task for task in all_tasks if task.status == "failure"]
 
         # Header
-        console.print(f"\n[bold blue]📊 Final Execution Report[/bold blue]")
+        console.print("\n[bold blue]📊 Final Execution Report[/bold blue]")
         console.print(f"[dim]Query: {query}[/dim]\n")
 
         # Successful Tasks Details
@@ -376,7 +387,7 @@ class PlanningAgent(BaseAgent):
                 agent_stats[agent_name]["failed"] += 1
 
         if agent_stats:
-            console.print(f"\n[bold blue]🤖 Agent Performance[/bold blue]")
+            console.print("\n[bold blue]🤖 Agent Performance[/bold blue]")
             agent_table = Table(
                 show_header=True,
                 header_style="bold magenta",
@@ -413,7 +424,7 @@ class PlanningAgent(BaseAgent):
 
         # Generate AI summary if there are results
         if all_tasks:
-            console.print(f"\n[bold magenta]🤖 AI Summary[/bold magenta]")
+            console.print("\n[bold magenta]🤖 AI Summary[/bold magenta]")
 
             overall_result = []
             for task in all_tasks:
@@ -463,7 +474,7 @@ class PlanningAgent(BaseAgent):
             # Restart the agent status display
             status_manager.start_live_display()
 
-        console.print(f"[dim]Report generated successfully ✨[/dim]\n")
+        console.print("[dim]Report generated successfully ✨[/dim]\n")
 
 
 class AgentStatus:
